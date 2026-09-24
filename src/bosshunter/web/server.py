@@ -5,6 +5,9 @@ Serves:
 - /* → Frontend static files (dist/)
 """
 
+from bosshunter.employment import classify_employment, internship_rejection
+from bosshunter.collection.models import classify_recruitment_type
+
 import json
 from ipaddress import ip_address
 from urllib.parse import urlsplit
@@ -231,6 +234,10 @@ def _serialize_history_items(items):
 def _serialize_job(item):
 	"""Expose greeting style issues as a list while retaining DB compatibility."""
 	record = dict(item)
+	record["employment_type"] = classify_employment(record)
+	record["employment_review"] = internship_rejection(record, load_config(CONFIG_PATH))
+	if record.get("source_platform", "boss") == "boss":
+		record["recruitment_type"] = classify_recruitment_type(record.get("title", ""), record.get("experience", ""), record.get("jd", ""))
 	record["greeting_activity"] = greeting_activity.get(str(record.get("id") or ""))
 	raw_issues = record.get("greeting_style_issues")
 	if isinstance(raw_issues, str):
@@ -1238,6 +1245,7 @@ def api_job_search():
 					continue
 				filtered_rows.append(row)
 			rows = filtered_rows
+		rows = [_serialize_job(row) for row in rows]
 		total = len(rows)
 		return _json_response({
 			"items": rows[offset:offset + limit],
