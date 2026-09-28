@@ -47,10 +47,24 @@ def internship_only(config: Mapping[str, Any]) -> bool:
     return {item.strip() for item in value} == {"实习"}
 
 
+def internship_config_error(config: Mapping[str, Any]) -> str:
+    """An internship search never overrides the user's acceptance preference."""
+    if internship_only(config) and _mapping(config.get("profile")).get("allow_internship") is not True:
+        return "仅实习筛选与未开启“接受实习/管培岗位”冲突：请开启该设置或取消仅实习筛选"
+    return ""
+
+
 def internship_rejection(job: Mapping[str, Any], config: Mapping[str, Any]) -> str:
-    if str(job.get("source_platform") or "boss") != "boss" or not internship_only(config):
+    if str(job.get("source_platform") or "boss") != "boss":
         return ""
+    conflict = internship_config_error(config)
+    if conflict:
+        return conflict
     kind = classify_employment(job)
+    if kind == "internship" and _mapping(config.get("profile")).get("allow_internship") is not True:
+        return "实习/管培岗位"  # preserve the existing prefilter rejection message
+    if not internship_only(config):
+        return ""
     if kind == "internship":
         return ""
     if kind in {"full_time", "part_time"}:

@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from bosshunter.ai.prefilter import quick_score
-from bosshunter.employment import internship_only, internship_rejection
+from bosshunter.employment import internship_config_error, internship_only, internship_rejection
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
 from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
@@ -337,6 +337,12 @@ class BossCollector:
         return str(request.city_codes.get(city) or CITY_CODES.get(city) or "") or None
 
     def collect(self, request: PlatformCollectionRequest, hooks: CollectorHooks) -> PlatformCollectionResult:
+        type_config = {
+            "profile": self.config.get("profile", {}),
+            "platforms": {"boss": {"search": {"filters": request.filters}}},
+        }
+        if conflict := internship_config_error(type_config):
+            return PlatformCollectionResult(self.platform, "failed", "internship_config_conflict", conflict)
         collection_cfg = self.config.get("collection", {}) if isinstance(self.config.get("collection"), dict) else {}
         delay_multiplier = _bounded_float(
             collection_cfg.get("collection_delay_multiplier", 1.5),
@@ -366,7 +372,6 @@ class BossCollector:
                 },
             },
         }}
-        type_config = {"platforms": {"boss": {"search": {"filters": request.filters}}}}
         only_internships = internship_only(type_config)
         worker_target: str | None = None
         detail_worker: str | None = None

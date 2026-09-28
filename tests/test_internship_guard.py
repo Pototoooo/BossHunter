@@ -231,3 +231,110 @@ def test_legacy_scraper_counts_employment_filter_events():
          patch("bosshunter.scraper.jobs.BossCollector.collect", side_effect=collect):
         assert scrape_jobs(config, ["Go"]) == 0
     assert updates[-1]["filtered"] == 1
+
+
+@pytest.mark.parametrize("acceptance", [False, None, "false"])
+def test_disabled_acceptance_stops_internship_search_before_browser(acceptance):
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = acceptance
+    result, items, _, scripts = collect_fixture("后端开发", "职位类型：实习", config=config)
+    assert result.reason_code == "internship_config_conflict"
+    assert "接受实习" in result.message
+    assert items == []
+    assert scripts == []
+
+
+def test_default_disabled_acceptance_cannot_start_internship_search():
+    result, items, _, scripts = collect_fixture("后端开发", "职位类型：实习", config={})
+    assert result.reason_code == "internship_config_conflict"
+    assert items == scripts == []
+
+
+def test_disabled_acceptance_is_checked_after_detail_without_only_filter():
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = False
+    result, items, events, scripts = collect_fixture("后端开发", "职位类型：实习", config=config, filters={})
+    assert JS_EXTRACT_DETAIL in scripts  # generic list title passed, JD is authoritative
+    assert items == []
+    assert any(e.get("increment_filtered") and e["message"] == "实习/管培岗位" for e in events)
+    assert internship_rejection({"title": "后端开发", "jd": "职位类型：实习"}, config)
+
+
+@pytest.mark.parametrize("filters", [{"job_type": ["实习"]}, {}])
+def test_sender_blocks_detail_only_internship_when_acceptance_disabled(filters):
+    from bosshunter.executor.sender import send_greetings
+
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = False
+    config["platforms"]["boss"]["search"]["filters"] = filters
+    with patch("bosshunter.executor.sender.get_db", return_value=MagicMock()), \
+         patch("bosshunter.executor.sender.PlatformAccessGuard"), \
+         patch("bosshunter.executor.sender.get_jobs_ready_to_send", return_value=[{
+             "id": "historical", "title": "后端开发", "jd": "职位类型：实习", "source_platform": "boss",
+         }]), patch("bosshunter.executor.sender._send_greeting_once") as send:
+        assert send_greetings(config, force=True) == 0
+        assert config["_workbench_send_report"]["employment_blocked_ids"] == ["historical"]
+        send.assert_not_called()
+
+
+@pytest.mark.parametrize("source", ["saved", "dialog", "legacy"])
+def test_collection_start_rejects_conflicting_effective_filters(source):
+    from bosshunter.collection.orchestrator import normalize_collection_options
+
+    config = {"profile": {"allow_internship": False, "target_cities": ["深圳"]}}
+    search = {"keywords": ["Go"], "cities": ["深圳"], "filters": {"job_type": ["实习"]}}
+    raw = None
+    if source == "saved":
+        config["platforms"] = {"boss": {"search": search}}
+    elif source == "dialog":
+        raw = {"platform_order": ["boss"], "platforms": {"boss": search}}
+    else:
+        config["search"] = search
+    original = deepcopy(config)
+    with pytest.raises(ValueError, match="接受实习"):
+        normalize_collection_options(config, raw)
+    assert config == original
+    config["profile"]["allow_internship"] = True
+    assert normalize_collection_options(config, raw)["platforms"]["boss"]["filters"] == {"job_type": ["实习"]}
+
+
+def test_disabled_acceptance_does_not_block_full_time_or_other_platforms():
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = False
+    assert not internship_rejection({"title": "实习生", "source_platform": "zhilian"}, config)
+    result, items, _, _ = collect_fixture("后端开发", "职位类型：全职", config=config, filters={})
+    assert len(items) == 1
+
+
+@pytest.mark.parametrize("mode", ["collect", "full"])
+def test_web_start_returns_actionable_conflict_without_scheduling(mode):
+    import test_web_api_routes as web_tests
+    from bosshunter.web import server
+
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = False
+    options = {"platform_order": ["boss"], "platforms": {"boss": {
+        "keywords": ["Go"], "cities": ["深圳"], "filters": {"job_type": ["实习"]},
+    }}}
+    runner = MagicMock()
+    with patch.object(server, "load_config", return_value=config), \
+         patch.object(server, "task_runner", runner):
+        status, _, body = web_tests.WebApiRouteTests()._request(
+            "/api/workbench/task", method="POST", json_body={"mode": mode, "options": options},
+        )
+    assert status.startswith("400"), body
+    assert "接受实习" in json.loads(body)["error"]
+    runner.start.assert_not_called()
+
+
+def test_detail_guard_keeps_acceptance_after_startup_check():
+    # Exercise the detail defense independently: bypass only the startup validator
+    # to emulate an older entry point, not the shared employment guard.
+    config = deepcopy(CONFIG)
+    config["profile"]["allow_internship"] = False
+    with patch("bosshunter.collection.platforms.boss.internship_config_error", return_value=""):
+        _, items, events, scripts = collect_fixture("后端开发", "职位类型：实习", config=config)
+    assert JS_EXTRACT_DETAIL in scripts
+    assert items == []
+    assert any(e.get("increment_filtered") and "接受实习" in e["message"] for e in events)
+    assert quick_score({"title": "后端开发", "jd": "职位类型：实习", "salary": "10-20K"}, config)[0] == 0
