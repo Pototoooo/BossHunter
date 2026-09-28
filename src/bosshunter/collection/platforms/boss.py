@@ -14,7 +14,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from bosshunter.ai.prefilter import quick_score
-from bosshunter.employment import internship_rejection
+from bosshunter.employment import internship_only, internship_rejection
 from bosshunter.browser import close_tab, evaluate, navigate, new_tab, scroll, wait_for_load
 from bosshunter.collection.base import CollectorHooks
 from bosshunter.collection.models import JobCandidate, PlatformCollectionRequest, PlatformCollectionResult
@@ -357,6 +357,17 @@ class BossCollector:
             risk_pause_min,
             _positive_int(collection_cfg.get("risk_pause_max_minutes", 10), 10),
         )
+        # List cards can omit the type; keep every other prefilter setting and
+        # defer only the employment check until the detail JD has been read.
+        list_config = {**self.config, "platforms": {
+            **self.config.get("platforms", {}), "boss": {
+                **self.config.get("platforms", {}).get("boss", {}), "search": {
+                    **self.config.get("platforms", {}).get("boss", {}).get("search", {}), "filters": {},
+                },
+            },
+        }}
+        type_config = {"platforms": {"boss": {"search": {"filters": request.filters}}}}
+        only_internships = internship_only(type_config)
         worker_target: str | None = None
         detail_worker: str | None = None
         page_failures = 0
@@ -555,7 +566,7 @@ class BossCollector:
                             if signal and signal["kind"] == "user_stopped":
                                 return PlatformCollectionResult(self.platform, "stopped", "user_stopped", "用户已停止")
                             if signal: return risk(signal["kind"], signal["evidence"])
-                            if normalize_boss_search_filters(request.filters).get("job_type") == ["实习"]:
+                            if only_internships:
                                 if self.browser.evaluate(worker_target, JS_VERIFY_INTERNSHIP_FILTER) is not True:
                                     return PlatformCollectionResult(
                                         self.platform, "completed_with_shortage", "internship_filter_not_applied",
@@ -629,7 +640,6 @@ class BossCollector:
                             hooks.on_event(
                                 message="BOSS 薪资字体无法解析，已按配置保留该岗位（薪资留空）"
                             )
-                        list_config = {**self.config, "platforms": {"boss": {"search": {"filters": {}}}}} if self.config else {}
                         score, filter_reason = quick_score(raw, list_config) if self.config else (100, "")
                         if score <= 0:
                             hooks.on_event(message=f"BOSS 列表预筛：{filter_reason}", increment_filtered=True)
@@ -682,7 +692,6 @@ class BossCollector:
                             combo_complete = False
                             hooks.on_parse_failed("BOSS 详情缺少职位、公司、链接或 JD")
                             continue
-                        type_config = {"platforms": {"boss": {"search": {"filters": request.filters}}}}
                         type_reason = internship_rejection(merged.as_job_record(), type_config)
                         if type_reason:
                             hooks.on_event(message=type_reason, increment_filtered=True)
