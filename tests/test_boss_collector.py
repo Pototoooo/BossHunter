@@ -71,6 +71,12 @@ class BossCollectorUnitTests(TestCase):
         self.assertEqual(query["salary"], ["405"])
         self.assertEqual(query["industry"], ["100001,100002"])
 
+    def test_job_types_use_boss_search_codes(self):
+        for label, code in (("全职", "1901"), ("兼职", "1903"), ("实习", "1902")):
+            with self.subTest(label=label):
+                query = parse_qs(build_boss_filter_query({"job_type": [label]}))
+                self.assertEqual(query, {"jobType": [code]})
+
     def test_boss_filters_reject_unknown_labels_and_query_injection(self):
         normalized = normalize_boss_search_filters({
             "experience": ["1-3年", "任意经验"],

@@ -48,6 +48,10 @@ interface Job {
   deleted_reason?: string | null
   resume_path?: string
   last_error?: string
+  outsourcing_level?: 'clean' | 'suspected' | 'confirmed'
+  outsourcing_confirmed?: boolean
+  outsourcing_matches?: string[] | null
+  outsourcing_updated_at?: string | null
 }
 
 interface TopCompany {
@@ -212,6 +216,19 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     }
   }, [scope])
 
+  const updateJobStatus = useCallback(async (jobId: string, status: string) => {
+    const res = await fetch('/api/jobs/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_ids: [jobId], status }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || '修改岗位状态失败')
+    }
+    await fetchAll()
+  }, [fetchAll])
+
   const startTask = async (mode: 'full' | 'collect' | 'rescore' | 'greet' | 'monitor' | 'deliver', options?: Record<string, unknown>) => {
     const res = await fetch('/api/workbench/task', {
       method: 'POST',
@@ -266,6 +283,7 @@ export function useDashboard(scope: DashboardDataScope = 'all') {
     lastRefreshedAt,
     refresh: fetchAll,
     updateGreetingJob,
+    updateJobStatus,
     startTask,
     stopTask,
   }
